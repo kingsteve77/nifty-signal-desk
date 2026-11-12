@@ -84,7 +84,10 @@ async function preloadFiveMinuteHistory(token) {
       const data = await response.json();
       if (response.ok && data.s === "ok" && Array.isArray(data.candles)) {
         state.candles = data.candles.map(row => ({ time: Number(row[0]) * 1000, open: Number(row[1]), high: Number(row[2]), low: Number(row[3]), close: Number(row[4]) })).slice(-80);
-        if (state.candles.length) state.signal = analyzeCandles(key, state.candles);
+        if (state.candles.length) {
+          state.signal = analyzeCandles(key, state.candles);
+          if (state.signal) state.signal.completedAt = new Date(state.candles.at(-1).time + 300000).toISOString();
+        }
       } else {
         console.error("FYERS history preload failed for " + key + ":", data.message || response.status);
       }
