@@ -65,11 +65,11 @@ function connectFyersFeed(token) {
   if (dataSocket) { try { dataSocket.close(); } catch {} }
   market.connected = false;
   market.status = "Connecting to FYERS market-data socket";
-  dataSocket = new FyersDataSocket(appId() + ":" + token, "", true);
+  dataSocket = FyersDataSocket.getInstance(appId() + ":" + token, "");
   dataSocket.on("connect", () => {
     market.connected = true;
     market.status = "Connected; waiting for NIFTY index ticks";
-    dataSocket.subscribe(["NSE:NIFTY50-INDEX", "NSE:NIFTYBANK-INDEX"], "SymbolUpdate");
+    dataSocket.subscribe(["NSE:NIFTY50-INDEX", "NSE:NIFTYBANK-INDEX"]);
   });
   dataSocket.on("message", onTick);
   dataSocket.on("error", error => {
@@ -82,6 +82,7 @@ function connectFyersFeed(token) {
     market.status = "FYERS socket closed; reconnect required";
   });
   dataSocket.connect();
+  dataSocket.autoreconnect();
 }
 app.get("/api/health", (_req, res) => res.json({
   ok: true, mode: market.connected ? "live" : fyersAccessToken ? "authenticated-no-feed" : "demo",
