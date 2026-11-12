@@ -153,6 +153,7 @@ app.get("/api/fyers/callback", async (req, res) => {
       return res.status(502).send("FYERS authentication failed. Check Render logs and reconnect.");
     }
     fyersAccessToken = data.access_token;
+    await preloadFiveMinuteHistory(fyersAccessToken);
     connectFyersFeed(fyersAccessToken);
     res.send("FYERS login succeeded. The live market-data socket is starting. Return to NIFTY Signal Desk and check its feed status.");
   } catch (error) {
