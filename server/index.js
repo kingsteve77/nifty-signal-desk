@@ -281,7 +281,19 @@ app.get("/api/fyers/callback", async (req, res) => {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ grant_type: "authorization_code", appIdHash, code })
     });
-    const data = await response.json();
+    const responseText = await response.text();
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      const contentType = response.headers.get("content-type") || "unknown";
+      console.error("FYERS token exchange returned non-JSON:", {
+        httpStatus: response.status,
+        contentType,
+        bodyStart: responseText.slice(0, 300).replace(/[\\r\\n]+/g, " ")
+      });
+      return res.status(502).send("FYERS returned an unexpected response during token validation. Check Render logs for HTTP status and response type.");
+    }
     if (!response.ok || data.s !== "ok" || !data.access_token) {
       console.error("FYERS token exchange failed:", data.code || response.status, data.message || "No message");
       return res.status(502).send("FYERS authentication failed. Check Render logs and reconnect.");
