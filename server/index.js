@@ -200,28 +200,46 @@ function startOptionPolling() {
   optionPollTimer = setInterval(refreshOptionRecommendations, 20000);
 }
 function connectFyersFeed(token) {
-  if (dataSocket) { try { dataSocket.close(); } catch {} }
+  if (dataSocket) {
+    try { dataSocket.close(); } catch {}
+    dataSocket = null;
+  }
   market.connected = false;
   market.status = "Connecting to FYERS market-data socket";
-  dataSocket = FyersDataSocket.getInstance(appId() + ":" + token, "");
-  dataSocket.on("connect", () => {
-    market.connected = true;
-    market.status = "Connected; waiting for NIFTY index ticks";
-    dataSocket.subscribe(["NSE:NIFTY50-INDEX", "NSE:NIFTYBANK-INDEX"]);
-    startOptionPolling();
-  });
-  dataSocket.on("message", onTick);
-  dataSocket.on("error", error => {
+  try {
+    dataSocket = FyersDataSocket.getInstance(appId() + ":" + token, "");
+    dataSocket.on("connect", () => {
+      market.connected = true;
+      market.status = "Connected to FYERS; subscribing to index updates";
+      try {
+        dataSocket.subscribe(["NSE:NIFTY50-INDEX", "NSE:NIFTYBANK-INDEX"], "SymbolUpdate");
+        startOptionPolling();
+      } catch (error) {
+        market.connected = false;
+        market.status = "FYERS connected but index subscription failed";
+        console.error("FYERS subscribe error:", error?.message || String(error));
+      }
+    });
+    dataSocket.on("message", message => {
+      onTick(message);
+    });
+    dataSocket.on("error", error => {
+      market.connected = false;
+      market.status = "FYERS socket error: " + (error?.message || "check application logs");
+      console.error("FYERS socket error:", error?.message || String(error));
+    });
+    dataSocket.on("close", event => {
+      market.connected = false;
+      market.status = "FYERS socket closed: " + (typeof event === "string" ? event : JSON.stringify(event || {}));
+      console.error("FYERS socket closed:", event || "no close details");
+    });
+    dataSocket.autoreconnect(10);
+    dataSocket.connect();
+  } catch (error) {
     market.connected = false;
-    market.status = "FYERS socket error; reconnect required";
-    console.error("FYERS socket error:", error?.message || String(error));
-  });
-  dataSocket.on("close", () => {
-    market.connected = false;
-    market.status = "FYERS socket closed; reconnect required";
-  });
-  dataSocket.connect();
-  dataSocket.autoreconnect();
+    market.status = "FYERS socket initialization failed";
+    console.error("FYERS socket initialization error:", error?.stack || error?.message || String(error));
+  }
 }
 app.get("/api/health", (_req, res) => res.json({
   ok: true, mode: market.connected ? "live" : fyersAccessToken ? "authenticated-no-feed" : "demo",
