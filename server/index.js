@@ -212,7 +212,7 @@ function connectFyersFeed(token) {
       market.connected = true;
       market.status = "Connected to FYERS; subscribing to index updates";
       try {
-        dataSocket.subscribe(["NSE:NIFTY50-INDEX", "NSE:NIFTYBANK-INDEX"], false);
+        dataSocket.subscribe(["NSE:NIFTY50-INDEX", "NSE:NIFTYBANK-INDEX"]);
         startOptionPolling();
       } catch (error) {
         market.connected = false;
@@ -233,7 +233,7 @@ function connectFyersFeed(token) {
       market.status = "FYERS socket closed: " + (typeof event === "string" ? event : JSON.stringify(event || {}));
       console.error("FYERS socket closed:", event || "no close details");
     });
-    dataSocket.autoreconnect(10);
+    dataSocket.autoreconnect();
     dataSocket.connect();
   } catch (error) {
     market.connected = false;
