@@ -21,6 +21,14 @@ const market = {
 };
 let fyersAccessToken = null;
 let dataSocket = null;
+const recommendations = {
+  NIFTY: { action: "NO TRADE", reason: "Waiting for a valid index setup and option-chain data." },
+  BANKNIFTY: { action: "NO TRADE", reason: "Waiting for a valid index setup and option-chain data." }
+};
+const optionSnapshots = { NIFTY: null, BANKNIFTY: null };
+const activeTrades = { NIFTY: null, BANKNIFTY: null };
+let optionPollTimer = null;
+
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(root, "../public")));
 const appId = () => process.env.FYERS_APP_ID?.trim();
@@ -84,6 +92,104 @@ async function preloadFiveMinuteHistory(token) {
     }
   }
 }
+
+function freshIndexSignal(key) {
+  const state = market.indices[key];
+  const stale = !state.lastTickAt || Date.now() - new Date(state.lastTickAt).getTime() > 90000;
+  if (stale) return { action: "NO TRADE", reason: "Underlying index tick is stale." };
+  if (!state.signal || !["BUY CE BIAS", "BUY PE BIAS"].includes(state.signal.action)) return { action: "NO TRADE", reason: state.signal?.reason || "No confirmed five-minute directional setup." };
+  return state.signal;
+}
+async function fetchOptionChain(key, token) {
+  const underlying = market.indices[key].symbol;
+  const url = new URL("https://api-t1.fyers.in/data/options-chain-v3");
+  url.searchParams.set("symbol", underlying);
+  url.searchParams.set("strikecount", "8");
+  url.searchParams.set("greeks", "1");
+  const response = await fetch(url, { headers: { Authorization: appId() + ":" + token } });
+  const json = await response.json();
+  if (!response.ok || json.s !== "ok" || !json.data) throw new Error(json.message || "Option-chain request failed");
+  return json.data;
+}
+function chooseContract(chain, side) {
+  const legs = (chain.optionsChain || []).filter(x => x.option_type === side && x.symbol && Number(x.ltp) > 0 &&
+    Number(x.bid) > 0 && Number(x.ask) >= Number(x.bid) && Number(x.volume) > 0 && Number(x.oi) > 0);
+  const liquid = legs.filter(x => ((Number(x.ask) - Number(x.bid)) / Number(x.ltp)) <= 0.05);
+  const deltaLegs = liquid.filter(x => Number.isFinite(Number(x.greeks?.delta)) &&
+    Math.abs(Number(x.greeks.delta)) >= 0.40 && Math.abs(Number(x.greeks.delta)) <= 0.65);
+  const pool = deltaLegs.length ? deltaLegs : liquid;
+  pool.sort((a,b) => {
+    const da = Number.isFinite(Number(a.greeks?.delta)) ? Math.abs(Math.abs(Number(a.greeks.delta)) - 0.50) : 1;
+    const db = Number.isFinite(Number(b.greeks?.delta)) ? Math.abs(Math.abs(Number(b.greeks.delta)) - 0.50) : 1;
+    return da - db || Number(b.volume) - Number(a.volume);
+  });
+  return pool[0] || null;
+}
+async function refreshOptionRecommendations() {
+  if (!fyersAccessToken) return;
+  for (const key of ["NIFTY", "BANKNIFTY"]) {
+    try {
+      const signal = freshIndexSignal(key);
+      const active = activeTrades[key];
+      if (active) {
+        const chain = await fetchOptionChain(key, fyersAccessToken);
+        const live = (chain.optionsChain || []).find(x => x.symbol === active.symbol);
+        if (!live || !Number(live.ltp)) {
+          recommendations[key] = { ...active, action: "NO TRADE", reason: "Selected option premium is unavailable; do not enter or add." };
+          continue;
+        }
+        const premium = Number(live.ltp);
+        const invalidated = !["BUY CE BIAS", "BUY PE BIAS"].includes(signal.action) ||
+          (active.side === "CE" && signal.action !== "BUY CE BIAS") ||
+          (active.side === "PE" && signal.action !== "BUY PE BIAS");
+        if (premium <= active.stopLoss || premium >= active.target || invalidated) {
+          const reason = premium <= active.stopLoss ? "Option premium reached the stop-loss level." :
+            premium >= active.target ? "Option premium reached the target level." : "The five-minute underlying setup is no longer valid.";
+          recommendations[key] = { ...active, action: "EXIT", premium, reason, updatedAt: new Date().toISOString() };
+          activeTrades[key] = null;
+        } else {
+          recommendations[key] = { ...active, action: "HOLD", premium, reason: "Setup remains valid; monitor the stated stop-loss and target.", updatedAt: new Date().toISOString() };
+        }
+        continue;
+      }
+      if (!["BUY CE BIAS", "BUY PE BIAS"].includes(signal.action)) {
+        recommendations[key] = { action: "NO TRADE", reason: signal.reason || "No confirmed directional setup." };
+        continue;
+      }
+      const chain = await fetchOptionChain(key, fyersAccessToken);
+      const expiry = (chain.expiryData || []).filter(x => Number(x.expiry) * 1000 > Date.now()).sort((a,b) => Number(a.expiry) - Number(b.expiry))[0];
+      if (!expiry) throw new Error("No future expiry is listed by FYERS.");
+      const side = signal.action === "BUY CE BIAS" ? "CE" : "PE";
+      const contract = chooseContract(chain, side);
+      if (!contract) {
+        recommendations[key] = { action: "NO TRADE", reason: "No sufficiently liquid " + side + " contract with a usable bid/ask spread and premium was found." };
+        continue;
+      }
+      const entry = Number(contract.ask);
+      const trade = {
+        action: "BUY " + side, side, symbol: contract.symbol, strike: Number(contract.strike_price),
+        expiry: expiry.date, premium: Number(contract.ltp), entry: Number(entry.toFixed(2)),
+        stopLoss: Number((entry * 0.80).toFixed(2)), target: Number((entry * 1.30).toFixed(2)),
+        delta: Number.isFinite(Number(contract.greeks?.delta)) ? Number(contract.greeks.delta) : null,
+        volume: Number(contract.volume), oi: Number(contract.oi),
+        spreadPct: Number((((Number(contract.ask) - Number(contract.bid)) / Number(contract.ltp)) * 100).toFixed(2)),
+        reason: "Five-minute index bias aligned; nearest listed expiry and a liquid contract selected from the live FYERS option chain.",
+        signalTime: new Date().toISOString()
+      };
+      activeTrades[key] = trade;
+      recommendations[key] = trade;
+      optionSnapshots[key] = { checkedAt: new Date().toISOString(), expiry: expiry.date };
+    } catch (error) {
+      recommendations[key] = { action: "NO TRADE", reason: "Option-chain data unavailable: " + error.message };
+      console.error("Option-chain refresh failed for " + key + ":", error.message);
+    }
+  }
+}
+function startOptionPolling() {
+  if (optionPollTimer) clearInterval(optionPollTimer);
+  refreshOptionRecommendations();
+  optionPollTimer = setInterval(refreshOptionRecommendations, 20000);
+}
 function connectFyersFeed(token) {
   if (dataSocket) { try { dataSocket.close(); } catch {} }
   market.connected = false;
@@ -93,6 +199,7 @@ function connectFyersFeed(token) {
     market.connected = true;
     market.status = "Connected; waiting for NIFTY index ticks";
     dataSocket.subscribe(["NSE:NIFTY50-INDEX", "NSE:NIFTYBANK-INDEX"]);
+    startOptionPolling();
   });
   dataSocket.on("message", onTick);
   dataSocket.on("error", error => {
@@ -119,7 +226,7 @@ app.get("/api/market", (_req, res) => {
     indices[key] = { symbol: state.symbol, ltp: state.ltp, lastTickAt: state.lastTickAt,
       completedCandles: Math.max(0, state.candles.length - (state.candles.length ? 1 : 0)),
       stale, signal: stale ? { symbol: key, action: "NO TRADE", reason: "No fresh market tick in the last 90 seconds." } :
-        state.signal || { symbol: key, action: "NO TRADE", reason: "Waiting for completed five-minute candles." } };
+        state.signal || { symbol: key, action: "NO TRADE", reason: "Waiting for completed five-minute candles." }, recommendation: stale ? { action: "NO TRADE", reason: "Underlying tick is stale." } : recommendations[key] };
   }
   res.json({ connected: market.connected, status: market.status, lastTickAt: market.lastTickAt, indices });
 });
