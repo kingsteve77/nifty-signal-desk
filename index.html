@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0b1220">
+  <title>NIFTY Signal Desk</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div><div class="brand">NIFTY <span>SIGNAL DESK</span></div><div class="sub">Intraday market decision terminal</div></div>
+  <div class="status"><i id="statusDot"></i><span id="statusText">DEMO · NO LIVE FEED</span></div>
+</header>
+<main>
+  <section class="hero">
+    <div><p class="eyebrow">MARKET WATCH · INDIA</p><h1>Trade the setup.<br><em>Not the impulse.</em></h1><p class="muted">NIFTY and BANK NIFTY · 5-minute decision framework</p></div>
+    <div class="session"><span>MARKET SESSION</span><strong id="marketSession">Checking…</strong><small id="clock"></small></div>
+  </section>
+  <section class="grid two">
+    <article class="panel quote"><div class="panel-head"><h2>NIFTY 50</h2><span class="chip neutral">WAITING FOR FEED</span></div><div class="price" id="niftyPrice">—</div><div class="muted">Index value · live data not connected</div><div class="minirow"><span>VWAP <b>—</b></span><span>RSI <b>—</b></span><span>EMA 9/20 <b>—</b></span></div></article>
+    <article class="panel quote"><div class="panel-head"><h2>BANK NIFTY</h2><span class="chip neutral">WAITING FOR FEED</span></div><div class="price" id="bankPrice">—</div><div class="muted">Index value · live data not connected</div><div class="minirow"><span>VWAP <b>—</b></span><span>RSI <b>—</b></span><span>EMA 9/20 <b>—</b></span></div></article>
+  </section>
+  <section class="panel signal">
+    <div class="panel-head"><div><p class="eyebrow">CURRENT DECISION</p><h2>Signal board</h2></div><span class="chip warn">PAPER MODE</span></div>
+    <div class="signal-empty"><div class="no-trade">NO TRADE</div><p>Live market data is not connected. No buy/sell recommendation is being generated.</p><small>This is deliberate. A demo price must never trigger a real-money trade.</small></div>
+    <div class="signal-details">
+      <div><span>OPTION CONTRACT</span><b>—</b></div><div><span>ENTRY / PREMIUM</span><b>—</b></div>
+      <div><span>STOP LOSS</span><b>—</b></div><div><span>TARGET</span><b>—</b></div>
+      <div><span>HOLDING WINDOW</span><b>—</b></div><div><span>INVALIDATION</span><b>Feed unavailable</b></div>
+    </div>
+  </section>
+  <section class="grid two">
+    <article class="panel"><div class="panel-head"><h2>Risk calculator</h2><span class="chip neutral">PAPER ONLY</span></div>
+      <label>Trading capital (₹)<input id="capital" type="number" min="1000" value="5000"></label>
+      <label>Risk per trade (%)<input id="riskPct" type="number" min="0.1" max="1" step="0.1" value="0.5"></label>
+      <div class="risk-result"><span>Maximum planned loss</span><strong id="riskAmount">₹25</strong></div>
+      <p class="muted tiny">This is a risk budget, not a suggested position size. Option lot size, premium stop distance, charges and slippage must be checked before entry.</p>
+    </article>
+    <article class="panel"><div class="panel-head"><h2>Signal checklist</h2><span class="chip neutral">RULES</span></div>
+      <ul class="checklist"><li>5-minute candle completed</li><li>Price aligned with VWAP</li><li>EMA 9/20 trend aligned</li><li>RSI momentum confirmed</li><li>Volume expansion confirmed</li><li>Option spread and liquidity acceptable</li><li>Risk fits capital limit</li></ul>
+    </article>
+  </section>
+  <section class="panel"><div class="panel-head"><h2>Paper trade journal</h2><span class="chip neutral">LOCAL SESSION</span></div><p class="muted">Journal UI is a placeholder in this starter release. No trades are recorded until paper-trading logic is enabled.</p></section>
+</main>
+<footer>Educational decision-support software. Not investment advice. No live feed, no validated edge and no order execution are enabled.</footer>
+<script src="/app.js"></script>
+</body></html>
