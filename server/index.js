@@ -27,6 +27,7 @@ const recommendations = {
 };
 const optionSnapshots = { NIFTY: null, BANKNIFTY: null };
 const activeTrades = { NIFTY: null, BANKNIFTY: null };
+const lastExitSignalAt = { NIFTY: null, BANKNIFTY: null };
 let optionPollTimer = null;
 
 app.use(express.json({ limit: "1mb" }));
@@ -146,6 +147,7 @@ async function refreshOptionRecommendations() {
           const reason = premium <= active.stopLoss ? "Option premium reached the stop-loss level." :
             premium >= active.target ? "Option premium reached the target level." : "The five-minute underlying setup is no longer valid.";
           recommendations[key] = { ...active, action: "EXIT", premium, reason, updatedAt: new Date().toISOString() };
+          lastExitSignalAt[key] = active.signalTime;
           activeTrades[key] = null;
         } else {
           recommendations[key] = { ...active, action: "HOLD", premium, reason: "Setup remains valid; monitor the stated stop-loss and target.", updatedAt: new Date().toISOString() };
@@ -154,6 +156,10 @@ async function refreshOptionRecommendations() {
       }
       if (!["BUY CE BIAS", "BUY PE BIAS"].includes(signal.action)) {
         recommendations[key] = { action: "NO TRADE", reason: signal.reason || "No confirmed directional setup." };
+        continue;
+      }
+      if (lastExitSignalAt[key] && lastExitSignalAt[key] === signal.completedAt) {
+        recommendations[key] = { action: "NO TRADE", reason: "A previous setup has exited. Waiting for a new completed five-minute signal." };
         continue;
       }
       const chain = await fetchOptionChain(key, fyersAccessToken);
@@ -174,7 +180,7 @@ async function refreshOptionRecommendations() {
         volume: Number(contract.volume), oi: Number(contract.oi),
         spreadPct: Number((((Number(contract.ask) - Number(contract.bid)) / Number(contract.ltp)) * 100).toFixed(2)),
         reason: "Five-minute index bias aligned; nearest listed expiry and a liquid contract selected from the live FYERS option chain.",
-        signalTime: new Date().toISOString()
+        signalTime: signal.completedAt || new Date().toISOString()
       };
       activeTrades[key] = trade;
       recommendations[key] = trade;
