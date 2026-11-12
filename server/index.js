@@ -61,6 +61,29 @@ function onTick(message) {
     market.lastTickAt = state.lastTickAt;
   }
 }
+async function preloadFiveMinuteHistory(token) {
+  const now = Date.now();
+  const istDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(now));
+  const from = Math.floor(new Date(istDate + "T09:15:00+05:30").getTime() / 1000);
+  const to = Math.floor((now - 300000) / 1000);
+  if (to <= from) return;
+  for (const [key, state] of Object.entries(market.indices)) {
+    const url = new URL("https://api-t1.fyers.in/data/history");
+    for (const [name, value] of Object.entries({ symbol: state.symbol, resolution: "5", date_format: "0", range_from: String(from), range_to: String(to) })) url.searchParams.set(name, value);
+    try {
+      const response = await fetch(url, { headers: { Authorization: appId() + ":" + token } });
+      const data = await response.json();
+      if (response.ok && data.s === "ok" && Array.isArray(data.candles)) {
+        state.candles = data.candles.map(row => ({ time: Number(row[0]) * 1000, open: Number(row[1]), high: Number(row[2]), low: Number(row[3]), close: Number(row[4]) })).slice(-80);
+        if (state.candles.length) state.signal = analyzeCandles(key, state.candles);
+      } else {
+        console.error("FYERS history preload failed for " + key + ":", data.message || response.status);
+      }
+    } catch (error) {
+      console.error("FYERS history preload error for " + key + ":", error.message);
+    }
+  }
+}
 function connectFyersFeed(token) {
   if (dataSocket) { try { dataSocket.close(); } catch {} }
   market.connected = false;
