@@ -27,7 +27,7 @@ const recommendations = {
 };
 const optionSnapshots = { NIFTY: null, BANKNIFTY: null };
 const latestChains = { NIFTY: null, BANKNIFTY: null };
-const paper = { startingCash: 10000, cash: 10000, positions: [], history: [], nextId: 1 };
+const paper = { startingCash: 100000, cash: 100000, positions: [], history: [], nextId: 1 };
 const activeTrades = { NIFTY: null, BANKNIFTY: null };
 const lastExitSignalAt = { NIFTY: null, BANKNIFTY: null };
 let optionPollTimer = null;
