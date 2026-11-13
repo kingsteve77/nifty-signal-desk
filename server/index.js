@@ -106,12 +106,13 @@ function freshIndexSignal(key) {
   if (!state.signal || !["BUY CE BIAS", "BUY PE BIAS"].includes(state.signal.action)) return { action: "NO TRADE", reason: state.signal?.reason || "No confirmed five-minute directional setup." };
   return state.signal;
 }
-async function fetchOptionChain(key, token) {
+async function fetchOptionChain(key, token, timestamp = "") {
   const underlying = market.indices[key].symbol;
   const url = new URL("https://api-t1.fyers.in/data/options-chain-v3");
   url.searchParams.set("symbol", underlying);
   url.searchParams.set("strikecount", "8");
   url.searchParams.set("greeks", "1");
+  if (timestamp) url.searchParams.set("timestamp", timestamp);
   const response = await fetch(url, { headers: { Authorization: appId() + ":" + token } });
   const json = await response.json();
   if (!response.ok || json.s !== "ok" || !json.data) throw new Error(json.message || "Option-chain request failed");
@@ -251,10 +252,11 @@ app.get("/api/options/:index", async (req, res) => {
   if (!market.indices[key]) return res.status(400).json({ error: "Unsupported index" });
   if (!fyersAccessToken) return res.status(401).json({ error: "Connect FYERS first" });
   try {
-    const chain = await fetchOptionChain(key, fyersAccessToken);
+    const timestamp = String(req.query.timestamp || "");
+    const chain = await fetchOptionChain(key, fyersAccessToken, timestamp);
     const expiryData = (chain.expiryData || []).map(x => ({ expiry: x.date, timestamp: x.expiry }));
     const rows = (chain.optionsChain || []).map(x => ({
-      symbol: x.symbol, strike: Number(x.strike_price), type: x.option_type,
+      symbol: x.symbol, strike: Number(x.strike_price), type: x.option_type, expiry: chain.date || (expiryData[0]?.expiry || ""),
       ltp: Number(x.ltp) || null, bid: Number(x.bid) || null, ask: Number(x.ask) || null,
       volume: Number(x.volume) || 0, oi: Number(x.oi) || 0,
       oiChange: Number(x.oich) || 0, iv: Number(x.greeks?.iv) || null,
