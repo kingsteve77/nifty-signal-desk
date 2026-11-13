@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
-import { analyzeCandles } from "./strategy.js";
+import { analyzeCandles, analyzeScalpCandles } from "./strategy.js";
 
 const require = createRequire(import.meta.url);
 const { fyersDataSocket: FyersDataSocket } = require("fyers-api-v3");
@@ -15,8 +15,8 @@ const pendingStates = new Map();
 const market = {
   connected: false, status: "Not connected", lastTickAt: null,
   indices: {
-    NIFTY: { symbol: "NSE:NIFTY50-INDEX", ltp: null, candles: [], signal: null, lastTickAt: null },
-    BANKNIFTY: { symbol: "NSE:NIFTYBANK-INDEX", ltp: null, candles: [], signal: null, lastTickAt: null }
+    NIFTY: { symbol: "NSE:NIFTY50-INDEX", ltp: null, candles: [], scalpCandles: [], signal: null, scalpSignal: null, lastTickAt: null },
+    BANKNIFTY: { symbol: "NSE:NIFTYBANK-INDEX", ltp: null, candles: [], scalpCandles: [], signal: null, scalpSignal: null, lastTickAt: null }
   }
 };
 let fyersAccessToken = null;
@@ -67,6 +67,18 @@ function onTick(message) {
       candle.low = Math.min(candle.low, price);
       candle.close = price;
     }
+    const oneMinute = Math.floor(timestamp / 60000) * 60000;
+    let scalpCandle = state.scalpCandles.at(-1);
+    if (!scalpCandle || scalpCandle.time !== oneMinute) {
+      if (scalpCandle) state.scalpSignal = analyzeScalpCandles(key, state.scalpCandles);
+      scalpCandle = { time: oneMinute, open: price, high: price, low: price, close: price };
+      state.scalpCandles.push(scalpCandle);
+      state.scalpCandles = state.scalpCandles.slice(-120);
+    } else {
+      scalpCandle.high = Math.max(scalpCandle.high, price);
+      scalpCandle.low = Math.min(scalpCandle.low, price);
+      scalpCandle.close = price;
+    }
     state.ltp = price;
     state.lastTickAt = new Date(timestamp).toISOString();
     market.lastTickAt = state.lastTickAt;
@@ -96,6 +108,16 @@ async function preloadFiveMinuteHistory(token) {
     } catch (error) {
       console.error("FYERS history preload error for " + key + ":", error.message);
     }
+    try {
+      const scalpUrl = new URL("https://api-t1.fyers.in/data/history");
+      for (const [name, value] of Object.entries({ symbol: state.symbol, resolution: "1", date_format: "0", range_from: String(from), range_to: String(to) })) scalpUrl.searchParams.set(name, value);
+      const scalpResponse = await fetch(scalpUrl, { headers: { Authorization: appId() + ":" + token } });
+      const scalpData = await scalpResponse.json();
+      if (scalpResponse.ok && scalpData.s === "ok" && Array.isArray(scalpData.candles)) {
+        state.scalpCandles = scalpData.candles.map(row => ({ time: Number(row[0]) * 1000, open: Number(row[1]), high: Number(row[2]), low: Number(row[3]), close: Number(row[4]) })).slice(-120);
+        if (state.scalpCandles.length) state.scalpSignal = analyzeScalpCandles(key, state.scalpCandles);
+      } else console.error("FYERS one-minute history failed for " + key + ":", scalpData.message || scalpResponse.status);
+    } catch (error) { console.error("FYERS one-minute history error for " + key + ":", error.message); }
   }
 }
 
@@ -103,8 +125,10 @@ function freshIndexSignal(key) {
   const state = market.indices[key];
   const stale = !state.lastTickAt || Date.now() - new Date(state.lastTickAt).getTime() > 90000;
   if (stale) return { action: "NO TRADE", reason: "Underlying index tick is stale." };
-  if (!state.signal || !["BUY CE BIAS", "BUY PE BIAS"].includes(state.signal.action)) return { action: "NO TRADE", reason: state.signal?.reason || "No confirmed five-minute directional setup." };
-  return state.signal;
+  const scalp = state.scalpSignal;
+  if (!scalp || !["BUY CE BIAS", "BUY PE BIAS"].includes(scalp.action))
+    return { action: "NO TRADE", reason: scalp?.reason || "Waiting for a completed one-minute scalping setup." };
+  return scalp;
 }
 async function fetchOptionChain(key, token, timestamp = "") {
   const underlying = market.indices[key].symbol;
@@ -187,7 +211,7 @@ async function refreshOptionRecommendations() {
         delta: Number.isFinite(Number(contract.greeks?.delta)) ? Number(contract.greeks.delta) : null,
         volume: Number(contract.volume), oi: Number(contract.oi),
         spreadPct: Number((((Number(contract.ask) - Number(contract.bid)) / Number(contract.ltp)) * 100).toFixed(2)),
-        reason: "Five-minute index bias aligned; nearest listed expiry and a liquid contract selected from the live FYERS option chain.",
+        reason: "One-minute scalping setup aligned; nearest listed expiry and a liquid contract selected from the live FYERS option chain.",\n        holdingWindow: "5–10 minutes maximum; exit sooner at stop-loss or invalidation.",
         signalTime: signal.completedAt || new Date().toISOString()
       };
       activeTrades[key] = trade;
@@ -331,7 +355,7 @@ app.get("/api/market", (_req, res) => {
   for (const [key, state] of Object.entries(market.indices)) {
     const stale = !state.lastTickAt || Date.now() - new Date(state.lastTickAt).getTime() > 90000;
     indices[key] = { symbol: state.symbol, ltp: state.ltp, lastTickAt: state.lastTickAt,
-      completedCandles: Math.max(0, state.candles.length - (state.candles.length ? 1 : 0)),
+      completedCandles: Math.max(0, state.candles.length - (state.candles.length ? 1 : 0)), completedOneMinuteCandles: Math.max(0, state.scalpCandles.length - (state.scalpCandles.length ? 1 : 0)), scalpSignal: stale ? { action: "NO TRADE", reason: "No fresh market tick." } : state.scalpSignal,
       stale, signal: stale ? { symbol: key, action: "NO TRADE", reason: "No fresh market tick in the last 90 seconds." } :
         state.signal || { symbol: key, action: "NO TRADE", reason: "Waiting for completed five-minute candles." }, recommendation: stale ? { action: "NO TRADE", reason: "Underlying tick is stale." } : recommendations[key] };
   }
