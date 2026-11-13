@@ -256,7 +256,7 @@ app.get("/api/options/:index", async (req, res) => {
     const chain = await fetchOptionChain(key, fyersAccessToken, timestamp);
     const expiryData = (chain.expiryData || []).map(x => ({ expiry: x.date, timestamp: x.expiry }));
     const rows = (chain.optionsChain || []).map(x => ({
-      symbol: x.symbol, strike: Number(x.strike_price), type: x.option_type, expiry: chain.date || (expiryData[0]?.expiry || ""),
+      symbol: x.symbol, strike: Number(x.strike_price), type: x.option_type, expiry: timestamp || (expiryData[0]?.timestamp || ""),
       ltp: Number(x.ltp) || null, bid: Number(x.bid) || null, ask: Number(x.ask) || null,
       volume: Number(x.volume) || 0, oi: Number(x.oi) || 0,
       oiChange: Number(x.oich) || 0, iv: Number(x.greeks?.iv) || null,
