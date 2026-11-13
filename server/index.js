@@ -26,6 +26,8 @@ const recommendations = {
   BANKNIFTY: { action: "NO TRADE", reason: "Waiting for a valid index setup and option-chain data." }
 };
 const optionSnapshots = { NIFTY: null, BANKNIFTY: null };
+const latestChains = { NIFTY: null, BANKNIFTY: null };
+const paper = { startingCash: 10000, cash: 10000, positions: [], history: [], nextId: 1 };
 const activeTrades = { NIFTY: null, BANKNIFTY: null };
 const lastExitSignalAt = { NIFTY: null, BANKNIFTY: null };
 let optionPollTimer = null;
@@ -113,8 +115,10 @@ async function fetchOptionChain(key, token) {
   const response = await fetch(url, { headers: { Authorization: appId() + ":" + token } });
   const json = await response.json();
   if (!response.ok || json.s !== "ok" || !json.data) throw new Error(json.message || "Option-chain request failed");
+  latestChains[keyForUnderlying(underlying)] = { fetchedAt: new Date().toISOString(), data: json.data };
   return json.data;
 }
+function keyForUnderlying(symbol) { return symbol.includes("NIFTYBANK") ? "BANKNIFTY" : "NIFTY"; }
 function chooseContract(chain, side) {
   const legs = (chain.optionsChain || []).filter(x => x.option_type === side && x.symbol && Number(x.ltp) > 0 &&
     Number(x.bid) > 0 && Number(x.ask) >= Number(x.bid) && Number(x.volume) > 0 && Number(x.oi) > 0);
@@ -241,6 +245,66 @@ function connectFyersFeed(token) {
     console.error("FYERS socket initialization error:", error?.stack || error?.message || String(error));
   }
 }
+
+app.get("/api/options/:index", async (req, res) => {
+  const key = String(req.params.index || "").toUpperCase();
+  if (!market.indices[key]) return res.status(400).json({ error: "Unsupported index" });
+  if (!fyersAccessToken) return res.status(401).json({ error: "Connect FYERS first" });
+  try {
+    const chain = await fetchOptionChain(key, fyersAccessToken);
+    const expiryData = (chain.expiryData || []).map(x => ({ expiry: x.date, timestamp: x.expiry }));
+    const rows = (chain.optionsChain || []).map(x => ({
+      symbol: x.symbol, strike: Number(x.strike_price), type: x.option_type,
+      ltp: Number(x.ltp) || null, bid: Number(x.bid) || null, ask: Number(x.ask) || null,
+      volume: Number(x.volume) || 0, oi: Number(x.oi) || 0,
+      oiChange: Number(x.oich) || 0, iv: Number(x.greeks?.iv) || null,
+      delta: Number.isFinite(Number(x.greeks?.delta)) ? Number(x.greeks.delta) : null
+    })).filter(x => x.symbol && Number.isFinite(x.strike) && ["CE","PE"].includes(x.type));
+    res.json({ index: key, fetchedAt: latestChains[key]?.fetchedAt, expiryData, rows });
+  } catch (error) { res.status(502).json({ error: error.message }); }
+});
+app.get("/api/paper", (_req, res) => {
+  const positions = paper.positions.map(p => {
+    const key = p.index;
+    const rows = latestChains[key]?.data?.optionsChain || [];
+    const live = rows.find(x => x.symbol === p.symbol);
+    const ltp = Number(live?.ltp) || p.entry;
+    return { ...p, ltp, unrealized: Number(((ltp - p.entry) * p.quantity).toFixed(2)) };
+  });
+  const unrealized = positions.reduce((sum,p)=>sum+p.unrealized,0);
+  res.json({ startingCash: paper.startingCash, cash: Number(paper.cash.toFixed(2)), positions,
+    history: paper.history.slice(-30).reverse(), unrealized: Number(unrealized.toFixed(2)),
+    equity: Number((paper.cash + positions.reduce((s,p)=>s+p.ltp*p.quantity,0)).toFixed(2)) });
+});
+app.post("/api/paper/buy", (req, res) => {
+  const { index, symbol, quantity } = req.body || {};
+  const key = String(index || "").toUpperCase(), qty = Math.floor(Number(quantity));
+  if (!market.indices[key] || !symbol || !Number.isFinite(qty) || qty < 1) return res.status(400).json({ error: "Choose an index, option contract and quantity of units." });
+  const rows = latestChains[key]?.data?.optionsChain || [];
+  const contract = rows.find(x => x.symbol === symbol);
+  const price = Number(contract?.ask || contract?.ltp);
+  if (!contract || !Number.isFinite(price) || price <= 0) return res.status(400).json({ error: "No current option quote. Refresh the option chain." });
+  const cost = price * qty;
+  if (cost > paper.cash) return res.status(400).json({ error: "Insufficient virtual cash for this quantity." });
+  paper.cash -= cost;
+  paper.positions.push({ id: paper.nextId++, index: key, symbol, strike: Number(contract.strike_price), type: contract.option_type, quantity: qty, entry: price, openedAt: new Date().toISOString() });
+  res.json({ ok: true, message: "Paper position opened." });
+});
+app.post("/api/paper/close", (req, res) => {
+  const id = Number(req.body?.id);
+  const pos = paper.positions.find(p => p.id === id);
+  if (!pos) return res.status(404).json({ error: "Open paper position not found." });
+  const rows = latestChains[pos.index]?.data?.optionsChain || [];
+  const quote = rows.find(x => x.symbol === pos.symbol);
+  const exit = Number(quote?.bid || quote?.ltp);
+  if (!Number.isFinite(exit) || exit <= 0) return res.status(400).json({ error: "No current exit quote. Refresh the option chain." });
+  const pnl = Number(((exit - pos.entry) * pos.quantity).toFixed(2));
+  paper.cash += exit * pos.quantity;
+  paper.positions = paper.positions.filter(p => p.id !== id);
+  paper.history.push({ ...pos, exit, pnl, closedAt: new Date().toISOString() });
+  res.json({ ok: true, pnl });
+});
+
 app.get("/api/health", (_req, res) => res.json({
   ok: true, mode: market.connected ? "live" : fyersAccessToken ? "authenticated-no-feed" : "demo",
   provider: "fyers", marketConnected: market.connected, status: market.status,
