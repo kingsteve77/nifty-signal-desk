@@ -212,7 +212,7 @@ function connectFyersFeed(token) {
       market.connected = true;
       market.status = "Connected to FYERS; subscribing to index updates";
       try {
-        dataSocket.subscribe(["NSE:NIFTY50-INDEX", "NSE:NIFTYBANK-INDEX"], "SymbolUpdate");
+        dataSocket.subscribe(["NSE:NIFTY50-INDEX", "NSE:NIFTYBANK-INDEX"]);
         startOptionPolling();
       } catch (error) {
         market.connected = false;
