@@ -265,18 +265,32 @@ app.get("/api/options/:index", async (req, res) => {
     res.json({ index: key, fetchedAt: latestChains[key]?.fetchedAt, expiryData, rows });
   } catch (error) { res.status(502).json({ error: error.message }); }
 });
-app.get("/api/paper", (_req, res) => {
+app.get("/api/paper", async (_req, res) => {
+  // Refresh quotes for open paper positions so unrealized P&L is marked to a
+  // current executable exit-side quote (bid), not the old entry or stale chain.
+  const openIndices = [...new Set(paper.positions.map(p => p.index))];
+  await Promise.all(openIndices.map(async key => {
+    const cachedAt = latestChains[key]?.fetchedAt ? Date.parse(latestChains[key].fetchedAt) : 0;
+    if (fyersAccessToken && Date.now() - cachedAt > 12000) {
+      try { await fetchOptionChain(key, fyersAccessToken); }
+      catch (error) { console.error("Paper quote refresh failed for " + key + ":", error.message); }
+    }
+  }));
   const positions = paper.positions.map(p => {
-    const key = p.index;
-    const rows = latestChains[key]?.data?.optionsChain || [];
+    const rows = latestChains[p.index]?.data?.optionsChain || [];
     const live = rows.find(x => x.symbol === p.symbol);
-    const ltp = Number(live?.ltp) || p.entry;
-    return { ...p, ltp, unrealized: Number(((ltp - p.entry) * p.quantity).toFixed(2)) };
+    const bid = Number(live?.bid);
+    const ltp = Number(live?.ltp);
+    const mark = Number.isFinite(bid) && bid > 0 ? bid : Number.isFinite(ltp) && ltp > 0 ? ltp : p.entry;
+    return { ...p, ltp: Number.isFinite(ltp) && ltp > 0 ? ltp : null,
+      mark, quoteAt: latestChains[p.index]?.fetchedAt || null,
+      unrealized: Number(((mark - p.entry) * p.quantity).toFixed(2)) };
   });
   const unrealized = positions.reduce((sum,p)=>sum+p.unrealized,0);
+  const marketValue = positions.reduce((sum,p)=>sum+p.mark*p.quantity,0);
   res.json({ startingCash: paper.startingCash, cash: Number(paper.cash.toFixed(2)), positions,
     history: paper.history.slice(-30).reverse(), unrealized: Number(unrealized.toFixed(2)),
-    equity: Number((paper.cash + positions.reduce((s,p)=>s+p.ltp*p.quantity,0)).toFixed(2)) });
+    equity: Number((paper.cash + marketValue).toFixed(2)), marketValue: Number(marketValue.toFixed(2)) });
 });
 app.post("/api/paper/buy", (req, res) => {
   const { index, symbol, quantity } = req.body || {};
